@@ -20,10 +20,14 @@ RESPONSES_DICT = {
     '200': 'ok',
     '201': 'created',
     '202': 'accepted',
+    '205': 'contact add ok',
+    '206': 'contact delete ok',
     '300': 'broadcast message',
     '400': 'bad request or bad json',
     '401': 'not authorized',
     '402': 'incorrect username or password',
+    '405': 'contact add error',
+    '406': 'contact delete error',
     '403': 'forbidden : site ban in effect on users ip or similar',
     '404': 'not found : user or room does not exist on the server',
     '409': 'conflict : someone is already connected with a given user name',
@@ -32,6 +36,7 @@ RESPONSES_DICT = {
 }
 
 class GeneralMessage(object):
+    # __slots__ = ('msg', )
     def __init__(self):
         self.msg = {}
 
@@ -41,7 +46,7 @@ class GeneralMessage(object):
         else:
             self.msg[key] = value
 
-    def __getitem__(self, item):
+    def __getattr__(self, item):
         if item in self.msg:
             return self.msg[item]
         else:
@@ -177,6 +182,22 @@ class MessageDeleteLastMessageFwd(Message):
     def __init__(self, src):
         Message.__init__(self, 'delete_last_message')
         self.src = src
+
+class MessageSendFile(Message):
+    def __init__(self, name, length, src, dest):
+        Message.__init__(self, 'send_file')
+        self.filelength = length
+        self.name = name
+        self.src = src
+        self.dest = dest
+
+
+class File_data(object):
+    def __init__(self, name, filelength, src, dest):
+        self.name = name
+        self.filelength = filelength
+        self.src = src
+        self.dest = dest
 
 
 def main():

@@ -37,15 +37,63 @@ def padding_text(text):
     pad_len = (16 - len(text) % 16) % 16
     return text + b' ' * pad_len
 
-def encrypt(plaintext, key):
+def encrypt(data_to_encrypt, key):
+    padded_data = padding_text(data_to_encrypt)
+    pad_len = len(padded_data) - len(data_to_encrypt)
+    bpad = pad_len.to_bytes(4, 'big')
     cipher = AES.new(key, AES.MODE_CBC)
-    ciphtertext = cipher.iv + cipher.encrypt(plaintext)
+    ciphtertext = cipher.iv + bpad + cipher.encrypt(padded_data)
     return ciphtertext
 
 def decrypt(ciphertext, key):
     cipher = AES.new(key, AES.MODE_CBC, iv=ciphertext[:16])
-    msg = cipher.decrypt(ciphertext[16:])
+    bpad = ciphertext[16:20]
+    pad = int.from_bytes(bpad, 'big')
+    msg = cipher.decrypt(ciphertext[20:])
+    # msg = msg[0:-pad]
     return msg
+
+def encrypt_file(filename, key):
+    with open(filename, 'rb') as f:
+        data = f.read()
+        if data != b'':
+            return encrypt(data, key)
+    return None
+
+def decrypt_file(ciphertext, key, filename):
+    data = decrypt(ciphertext, key)
+    with open(filename, 'wb') as f:
+        f.write(data)
+
+# def encrypt(plaintext, key):
+#     cipher = AES.new(key, AES.MODE_CBC)
+#     ciphtertext = cipher.iv + cipher.encrypt(plaintext)
+#     return ciphtertext
+#
+# def decrypt(ciphertext, key):
+#     cipher = AES.new(key, AES.MODE_CBC, iv=ciphertext[:16])
+#     msg = cipher.decrypt(ciphertext[16:])
+#     return msg
+
+# def decrypt(ciphertext, key):
+#     cipher = AES.new(key, AES.MODE_CBC, iv=ciphertext[:16])
+#     bpad = ciphertext[16:20]
+#     pad = int.from_bytes(bpad, 'big')
+#     msg = cipher.decrypt(ciphertext[20:])
+#     return msg
+#
+# def encrypt_file(filename, key):
+#     with open(filename, 'rb') as f:
+#         data = f.read()
+#         if data != b'':
+#             return encrypt(data, key)
+#     return None
+#
+# def decrypt_file(ciphertext, key, filename):
+#     data = decrypt(ciphertext, key)
+#     with open(filename, 'wb') as f:
+#         f.write(data)
+#     return data
 
 #
 # #server:

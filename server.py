@@ -12,6 +12,8 @@ import queue as q
 import database.database as user_db
 import log.log_config as lg
 from utils import encryption, message2 as msg
+from utils.conf import *
+
 
 class MessageSender(th.Thread):
     def __init__(self):
@@ -24,11 +26,12 @@ class MessageSender(th.Thread):
         while not self.stop:
             if self.queue.not_empty:
                 connection, message = self.queue.get()
-                self.send_message(connection, message)
+                bl = len(message).to_bytes(4, 'big')
+                self.send_message(connection, bl + message)
 
     def send_message(self, connection, bmessage):
         try:
-            connection.send(bmessage)
+            connection.sendall(bmessage)
         except:
             lg.logger.error('Sender thread; send message error')
 
@@ -40,6 +43,9 @@ class MessageReciever(th.Thread):
         self.queue = q.Queue()
         self.daemon = True
         self.stop = False
+        self.awaiting_file = {}
+        self.continous_recieving = {}
+        self.continous_recieving_data = {}
 
     def run(self):
         while not self.stop:
@@ -72,8 +78,31 @@ class MessageReciever(th.Thread):
         recieved = {}
         for sock in r_clients:
             try:
-                bmessage = sock.recv(1024)
-                recieved[sock] = bmessage
+                if sock.fileno() not in self.continous_recieving:
+                    bl = sock.recv(4)
+                    l = int.from_bytes(bl, 'big')
+                    if l <= 4096:
+                        recieved[sock] = sock.recv(l)
+                    else:
+                        fd = sock.fileno()
+                        self.continous_recieving[fd] = l - 4096
+                        self.continous_recieving_data[fd] = sock.recv(4096)
+                else:
+                    fd = sock.fileno()
+                    to_read = 4096 if self.continous_recieving[fd] > 4096 else self.continous_recieving[fd]
+                    data = sock.recv(to_read)
+                    self.continous_recieving_data[fd] += data
+                    self.continous_recieving[fd] -= to_read
+                    if self.continous_recieving[fd] == 0:
+                        recieved[sock] = self.continous_recieving_data[fd]
+                        del self.continous_recieving[fd]
+                        del self.continous_recieving_data[fd]
+
+                # while l <= 4096:
+                #     data += sock.recv(4096)
+                #     l -= 4096
+                # data += sock.recv(l)
+                # recieved[sock] = data
             except:
                 self.server.socket_unavailable(sock)
         return recieved
@@ -86,18 +115,23 @@ class MessageReciever(th.Thread):
                 auth_bmessage_encrypted = encrypted_message[128:]
                 session_key = self.server.cipher_rsa_private.decrypt(session_key_encrypted)
                 self.server.session_key_dict[fd] = session_key
-                # self.server.send_session_key_ok(connection)
                 auth_bmessage = encryption.decrypt(auth_bmessage_encrypted, session_key)
                 auth_message = msg.Message()
                 auth_message.make_from_binary_json(auth_bmessage, 'utf-8')
                 self.server.authenticate_client(connection, auth_message)
             else:
                 session_key = self.server.session_key_dict[fd]
+                if fd in self.awaiting_file:
+                    file_path = get_path(self.awaiting_file[fd].name)
+                    f = encryption.decrypt_file(encrypted_message, session_key, file_path)
+                    self.server.forward_file(self.awaiting_file[fd], file_path)
+                    del self.awaiting_file[fd]
+                    break
                 bmessage = encryption.decrypt(encrypted_message, session_key)
                 message = msg.Message()
                 message.make_from_binary_json(bmessage, 'utf-8')
                 if message.action == 'get_contacts':
-                    username = message['user']
+                    username = message.user
                     self.server.send_contacts(connection, username)
                 if message.action == 'add_contact':
                     self.server.add_contact(connection, message.user, message.contact)
@@ -105,6 +139,17 @@ class MessageReciever(th.Thread):
                     self.server.delete_contact(connection, message.user, message.contact)
                 if message.action == 'personal_message':
                     self.server.forward_personal_message(connection, message)
+                if message.action == 'send_file':
+                    fdata = msg.File_data(message.name, message.filelength, message.src, message.dest)
+                    self.awaiting_file[fd] = fdata
+
+
+                    # self.server.sending_file_data[fd] = b''
+                    # self.server.send_waiting_for_file(connection)
+                # if message.action == 'file':
+                #     fdata = File_data(message.name, message.filelength, message.src, message.dest)
+                #     f = encryption.decrypt_file(message.file, session_key, message.name)
+
 
 
 class Server(object):
@@ -121,6 +166,8 @@ class Server(object):
         self.key, self.public_key = encryption.generate_key_public_key()
         self.cipher_rsa_private = encryption.generate_cipher_rsa_private(self.key)
         self.session_key_dict = {}
+        self.sending_file = {}
+        self.sending_file_data = {}
 
         #clients
         self.clients = []
@@ -218,7 +265,7 @@ class Server(object):
         # если пароль неверный
         elif password != user.password:
             # отправить сообщение
-            resp_message = msg.Response(0, 'password incorrect')
+            resp_message = msg.Response(402, 'Password incorrect')
             self.send_encrypted_message(client_connection, resp_message, binary=False)
             #не подключаем клиента
             self.clients.remove(client_connection)
@@ -339,6 +386,24 @@ class Server(object):
                 self.send_encrypted_message(connection, response, binary=False)
         session.close()
 
+    # пересылка файла
+    def forward_file(self, fdata, filename):
+        dest = fdata.dest
+        session = self.db.Session()
+        user = self.db.get_user_by_username(session, dest)
+        if user is not None:
+            if len(user.connected_user) > 0:
+                c_user = user.connected_user[0]
+                fd = c_user.fd
+                user_sock = None
+                for sock in self.clients:
+                    if sock.fileno() == fd:
+                        user_sock = sock
+                        break
+                message = msg.MessageSendFile(fdata.name, fdata.filelength, fdata.src, fdata.dest)
+                self.send_encrypted_message(user_sock, message, False)
+                self.send_encrypted_file(user_sock, filename)
+
     #Добавление контакта
     def add_contact(self, connection, username, contact_name):
         session = self.db.Session()
@@ -346,12 +411,12 @@ class Server(object):
             user = self.db.get_user_by_username(session, username)
             contact = self.db.get_user_by_username(session, contact_name)
             self.db.add_related(session, user, contact)
-            response = msg.Response(203, 'contact_add_ok')
+            response = msg.Response(205, 'contact_add_ok')
             self.send_encrypted_message(connection, response, binary=False)
             self.send_contact(connection, contact)
             self.listener.new_message('Client {} added contact: {}'.format(username, contact_name))
         except:
-            response = msg.Response(203, 'contact_add_error')
+            response = msg.Response(405, 'contact_add_error')
             self.send_encrypted_message(connection, response, binary=False)
             log_record = "problem adding contact"
             self.listener.new_message(log_record)
@@ -366,12 +431,12 @@ class Server(object):
             user = self.db.get_user_by_username(session, username)
             contact = self.db.get_user_by_username(session, contact_name)
             self.db.delete_related(session, user, contact)
-            response = msg.Response(203, 'contact_delete_ok')
-            response.add_key_value('contact', contact_name)
+            response = msg.Response(206, contact_name)
+            # response.add_key_value('contact', contact_name)
             self.send_encrypted_message(connection, response, binary=False)
             self.listener.new_message('Client {} deleted contact: {}'.format(username, contact_name))
         except:
-            response = msg.Response(203, 'contact_delete_error')
+            response = msg.Response(406, 'contact_delete_error')
             self.send_encrypted_message(connection, response, binary=False)
             log_record = "problem deleting contact"
             self.listener.new_message(log_record)
@@ -391,8 +456,15 @@ class Server(object):
         else:
             bmessage = message
         if fd in self.session_key_dict:
-            enctypted_message = encryption.encrypt(encryption.padding_text(bmessage), self.session_key_dict[fd])
+            enctypted_message = encryption.encrypt(bmessage, self.session_key_dict[fd])
             self.sender.queue.put((connection, enctypted_message))
+
+    def send_encrypted_file(self, connection, file):
+        fd = connection.fileno()
+        if fd in self.session_key_dict:
+            encrypted_file = encryption.encrypt_file(file, self.session_key_dict[fd])
+            print(len(encrypted_file))
+            self.sender.queue.put((connection, encrypted_file))
 
     def broadcast(self, text_message, omit=None):
         self.listener.new_message('Broadcast message: {}'.format(text_message))
