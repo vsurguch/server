@@ -1,47 +1,17 @@
 
-from pathlib import Path
-from os import mkdir
-from os.path import join, exists
+
 from sys import argv as sys_argv
 
 # from sky_server.utils import menu
 # import sky_server.server as serv
 # from sky_server.database.database import PostponedMessages
+# from sky_server.utils.conf import *
 
 from utils import menu
 import server as serv
 from database.database import PostponedMessages
+from utils.conf import *
 
-CONF_FILE_NAME = 'sky_serv.conf'
-CONF_DIR_NAME = 'sky_serv'
-CONF_DICT = {
-    'hostname': 'localhost',
-    'port': '8888',
-    'output': 'console'
-}
-LOG_FILE_NAME = 'logfile.txt'
-DB_FILE_NAME = 'server.db'
-
-def make_conf_file():
-    conf_dir = join(str(Path.home()), CONF_DIR_NAME)
-    if not exists(conf_dir):
-        mkdir(conf_dir)
-    conf_file = join(conf_dir, CONF_FILE_NAME)
-    with open(conf_file, 'w') as f:
-        for k,v in CONF_DICT.items():
-            f.write('{}={}\n'.format(k,v))
-
-def read_conf():
-    conf_file = join(str(Path.home()), CONF_DIR_NAME, CONF_FILE_NAME)
-    if not exists(conf_file):
-        make_conf_file()
-    else:
-        with open(conf_file, 'r') as f:
-            for line in f:
-                kv = line.split('=')
-                k = kv[0]
-                v = kv[1][:-1]
-                CONF_DICT[k] = v
 
 def output_to(msg, output):
     if output == '':
@@ -58,10 +28,10 @@ class ConsoleListener(object):
         output_to(message, self.output)
 
     def new_user_online(self, username):
-        output_to('New user online: {}\n'.format(username), self.output)
+        output_to('New user online: {}'.format(username), self.output)
 
     def user_offline(self, username):
-        output_to('user offline: {}\n'.format(username), self.output)
+        output_to('user offline: {}'.format(username), self.output)
 
 def main():
     read_conf()

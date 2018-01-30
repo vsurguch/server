@@ -7,7 +7,8 @@ import queue as q
 #
 # import sky_server.database.database as user_db
 # import sky_server.log.log_config as lg
-# from sky_server.utils import encryption, message as msg
+# from sky_server.utils import encryption, message2 as msg
+# from sky_server.utils.conf import *
 
 import database.database as user_db
 import log.log_config as lg
@@ -81,28 +82,29 @@ class MessageReciever(th.Thread):
                 if sock.fileno() not in self.continous_recieving:
                     bl = sock.recv(4)
                     l = int.from_bytes(bl, 'big')
+                    fd = sock.fileno()
                     if l <= 4096:
-                        recieved[sock] = sock.recv(l)
+                        recieved[sock] = b''
+                        leng_to_read = l
+                        while leng_to_read != 0:
+                            data = sock.recv(leng_to_read)
+                            recieved[sock] += data
+                            leng_to_read -= len(data)
                     else:
-                        fd = sock.fileno()
-                        self.continous_recieving[fd] = l - 4096
-                        self.continous_recieving_data[fd] = sock.recv(4096)
+                        data = sock.recv(4096)
+                        self.continous_recieving[fd] = l - len(data)
+                        self.continous_recieving_data[fd] = data
+
                 else:
                     fd = sock.fileno()
                     to_read = 4096 if self.continous_recieving[fd] > 4096 else self.continous_recieving[fd]
                     data = sock.recv(to_read)
                     self.continous_recieving_data[fd] += data
-                    self.continous_recieving[fd] -= to_read
+                    self.continous_recieving[fd] -= len(data)
                     if self.continous_recieving[fd] == 0:
                         recieved[sock] = self.continous_recieving_data[fd]
                         del self.continous_recieving[fd]
                         del self.continous_recieving_data[fd]
-
-                # while l <= 4096:
-                #     data += sock.recv(4096)
-                #     l -= 4096
-                # data += sock.recv(l)
-                # recieved[sock] = data
             except:
                 self.server.socket_unavailable(sock)
         return recieved
@@ -142,14 +144,6 @@ class MessageReciever(th.Thread):
                 if message.action == 'send_file':
                     fdata = msg.File_data(message.name, message.filelength, message.src, message.dest)
                     self.awaiting_file[fd] = fdata
-
-
-                    # self.server.sending_file_data[fd] = b''
-                    # self.server.send_waiting_for_file(connection)
-                # if message.action == 'file':
-                #     fdata = File_data(message.name, message.filelength, message.src, message.dest)
-                #     f = encryption.decrypt_file(message.file, session_key, message.name)
-
 
 
 class Server(object):
@@ -239,7 +233,7 @@ class Server(object):
         user_data = message.user
         username = user_data['account_name']
         password = user_data['password']
-        fd = str(client_connection.fileno())
+        # fd = str(client_connection.fileno())
         self.listener.new_message('Client {} asked for authentification'.format(username))
 
         session = self.db.Session()
@@ -302,21 +296,25 @@ class Server(object):
 
     #действия при входе пользователя username
     def new_user_online(self, session, username):
+        # session = self.db.Session()
         related_online = self.find_related_users_online(session, username)
         message = msg.MessageContactOnline(username)
         for r_user in related_online:
             self.send_encrypted_message(r_user, message, binary=False)
         self.connected.append(username)
         self.listener.new_user_online(username)
+        # session.close()
 
     #действия при выходе пользователя username
-    def user_offline(self, session, username):
+    def user_offline(self, session,  username):
+        # session = self.db.Session()
         related_online = self.find_related_users_online(session, username)
         message = msg.MessageContactOffline(username)
         for r_user in related_online:
             self.send_encrypted_message(r_user, message, binary=False)
         self.connected.remove(username)
         self.listener.user_offline(username)
+        # session.close()
 
     def send_postponed(self, connection, username):
         # send postponed messages
